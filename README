@@ -1,0 +1,21 @@
+===============
+Program: fdscan 
+===============
+* TBD
+
+
+======
+Usage:
+======
+$ ./fdscan [-r filename] [-i interface] [-t time] [-o time_offset] [-S secs] [-h HNum] [-p PNum] [-V]
+
+
+==================
+Website resources:
+==================
+TBD
+
+======
+Notes:
+======
+TBD
