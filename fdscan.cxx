@@ -2,12 +2,11 @@
 #include <vector>
 #include <map>
 #include <algorithm>
-
+#include <sstream>
 #include "fdscan.h"
 
 static std::map<size_t, std::vector<Flow>> finishedFlows;
 static std::vector<Flow> flows;
-static int num = 0; // number of flows to print, default 0 means print all flows
 static unsigned long timeout_interval = 60; // flow interval
 static unsigned long time_offset = 0; // time to wait to start capturing fata
 static unsigned long runtime = 0; // total time to run for specified by user
@@ -15,6 +14,12 @@ static unsigned long first_timestamp = 0; // fist timestamp in capture
 static unsigned long start_time = 0; // time to start capture based on runtime, offset, etc.
 static unsigned long max_runtime = 0; // maximum runtime for capture based on offset, runtime, etc.
 static int user_specified_time = 0; // did the use specify a runtime
+
+static std::map<size_t, Scanner> scanners;
+static bool verbose = false;
+static int hostsThreshold = 30;
+static int portsThreshold = 30;
+static bool debug = true;
 
 //
 // Format string for a nice output
@@ -47,34 +52,92 @@ void printHeader()
 }
 
 //
-// Move remainging flows to finishedFlows and print output
+// Move remainging flows to finishedFlows
 //
-void cleanupAndPrint()
+void cleanup()
 {
   for (auto &flow : flows) {
     size_t hashValue = flow.hashValue();
     finishedFlows[hashValue].push_back(flow);
   }
-  printHeader();
-  if (num == 0) {
-    for (auto &kvp : finishedFlows) {
-      for (auto &flow : kvp.second) {
+}
+
+//
+// Find scanners
+//
+void compileScanners()
+{
+  // compile all potential scanners
+  for (auto &finishedFlow : finishedFlows) {
+    for (auto &flow : finishedFlow.second) {
+      if (debug)
         flow.print();
+      Scanner scanner(flow.srcAddr, flow.protocol);
+      auto scannerItr = std::find_if(scanners.begin(), scanners.end(), scanner);
+      if (scannerItr != scanners.end()) {
+        // Already tracking this scanner
+        auto &s = *scannerItr;
+        auto hostItr = std::find(s.dstHosts.begin(), s.dstHosts.end(), flow.dstAddr);
+        if (hostItr != s.dstHosts.end()) {
+          // new dest host to add
+          s.dstHosts.push_back(flow.dstAddr);
+        }
+
+        auto portItr = std::find(s.dstPorts.begin(), s.dstPorts.end(), flow.dstPort);
+        if (portItr != s.dstPorts.end()) {
+          // new dest port to add
+          s.dstPorts.push_back(flow.dstPort);
+        }
+      } else {
+        // New scanner - add it to our list of potentials
+        scanner.dstHosts.push_back(flow.dstAddr);
+        scanner.dstPorts.push_back(flow.dstPort);
+        size_t hashValue = scanner.hashValue();
+        finishedFlows[hashValue].push_back(scanner);
       }
+      // TODO maybe do the same for the flow.dstAddr?
     }
-  } else {
-    int i = 0;
-    for (auto &kvp : finishedFlows) {
-      for (auto &flow : kvp.second) {
-        if (i < num) {
-          flow.print();
-          i++;
-        } else {
-          return;
+  }
+}
+
+void printScanners()
+{
+  // will the real scanners please stand up, please stand up
+  if (verbose) {
+    // print scanner details
+    std::cout << padString("Scanner", 16)
+    << padString("Proto", 6)
+    << padString("HostScanned", 16)
+    << "PortsScanned" << std::endl;
+    for (auto &s : scanners) {
+      auto numHosts = s.dstHosts.size();
+      auto numPorts = s.dstPorts.size();
+      if (numHosts >= hostsThreshold || numPorts >= portsThreshold) {
+        // we have a scanner!
+        for (auto &host : s.dstHosts) {
+          //std::string portStr = formatPortStr(
+          //std::cout << padString(s.ip, 16)
+          //<< padString(s.protocol, 6)
+          //<< padString(host, 16)
+          //<< std::endl;
+          //<< std::endl;
         }
       }
     }
   }
+
+  // print scanner summary
+  std::cout << "Summary:" << std::endl;
+  std::cout << padString("Scanner", 16) << "#HostsScanned #PortsScanned" << std::endl;
+  for (auto &s : scanners) {
+    auto numHosts = s.dstHosts.size();
+    auto numPorts = s.dstPorts.size();
+    if (numHosts >= hostsThreshold || numPorts >= portsThreshold) {
+      // we have a scanner!
+      std::cout << padString(s.ip, 16) << padString(numHosts, 14) << numPorts << std::endl;
+    }
+  }
+
 }
 
 //
@@ -111,9 +174,6 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     else
       start_time = first_timestamp;
     max_runtime = start_time + runtime;
-    /*DEBUG*/fprintf(stdout, "Initialized first_timestamp =  %lu\n", first_timestamp);
-    /*DEBUG*/fprintf(stdout, "Initialized max_runtime =      %lu\n", max_runtime);
-    /*DEBUG*/fprintf(stdout, "Initialized start_time =       %lu\n", start_time);
   }
 
   // Check we're doing ok on time
@@ -122,8 +182,9 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     return;
   }
   if (user_specified_time == 1 && (curr_time > max_runtime)) {
-    fprintf(stdout, "\nRuntime limit of %lu seconds reached, exiting..\n", runtime);
-    cleanupAndPrint();
+    cleanup();
+    compileScanners();
+    printScanners();
     exit(0);
   }
 
@@ -185,14 +246,12 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     // check flow interval time
     //
     u_long flow_time = (curr_time - f.startTime.tv_sec);
-    /*DEBUG*/fprintf(stdout, "current flow time = %lu\n", flow_time);
+    ///*DEBUG*/fprintf(stdout, "current flow time = %lu\n", flow_time);
     if (flow_time >= timeout_interval) {
-      /*DEBUG*/fprintf(stdout, "end flow\n");
+      ///*DEBUG*/fprintf(stdout, "end flow\n");
       size_t hashValue = f.hashValue();
       finishedFlows[hashValue].push_back(f);
-      /*DEBUG*/fprintf(stdout, "before erase %lu\n", flows.size());
       flows.erase(flowItr);
-      /*DEBUG*/fprintf(stdout, "after  erase %lu\n", flows.size());
       return;
     }
 
@@ -209,7 +268,6 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     //
     // udpate duration
     //
-    // TODO verify this is working, seems off
     struct timeval currentTimestamp;
     currentTimestamp.tv_sec = pkthdr->ts.tv_sec;
     currentTimestamp.tv_usec = pkthdr->ts.tv_usec;
@@ -228,7 +286,9 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
       if (size_payload > 0) {
         if (f.dir == "<-")
           f.dir = "<->";
-        else if (flow.dir == "")
+        else if (f.dir == "->")
+          f.dir = "<->";
+        else if (f.dir == "")
           f.dir = "->";
       } else if ((flags = tcp->th_flags) & (TH_URG|TH_ACK|TH_SYN|TH_FIN|TH_RST|TH_PUSH)) {
         if (flags & TH_SYN) {
@@ -242,6 +302,8 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
           else if (f.dir == "")
             f.dir = "<-";
         }
+        if (f.isOppositeDirection(flow))
+          f.dir = "<->";
       }
     }
 
@@ -250,7 +312,10 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     //
     if (f.protocol == "ICMP") {
       icmp = (struct icmp*)(packet + SIZE_ETHERNET + size_ip);
-      f.state = std::to_string(icmp->icmp_type);
+      //f.state = std::to_string(icmp->icmp_type);
+      std::stringstream ss;
+      ss << (int)icmp->icmp_type;
+      f.state = ss.str();
     } else if (f.protocol == "UDP") {
       // leave blank intentionally
     } else if (f.protocol == "TCP") {
@@ -308,7 +373,7 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
       int size_payload = ntohs(ip->ip_len) - (size_ip + size_tcp);
       if (size_payload > 0)
         flow.dir = "->";
-      else if ((flags = tcp->th_flags) & (TH_URG|TH_ACK|TH_SYN|TH_FIN|TH_RST|TH_PUSH)) {
+      if ((flags = tcp->th_flags) & (TH_URG|TH_ACK|TH_SYN|TH_FIN|TH_RST|TH_PUSH)) {
         if (flags & TH_FIN)
           flow.dir = "<-";
         else if (flags & TH_SYN)
@@ -335,7 +400,10 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     //
     if (flow.protocol == "ICMP") {
       icmp = (struct icmp*)(packet + SIZE_ETHERNET + size_ip);
-      flow.state = std::to_string(icmp->icmp_type);
+      //flow.state = std::to_string(icmp->icmp_type);
+      std::stringstream ss;
+      ss << (int)icmp->icmp_type;
+      flow.state = ss.str();
     }
     else if (flow.protocol == "UDP") {
       flow.state = "";
@@ -372,6 +440,7 @@ int main(int argc, char* argv[])
   std::string filename;
   std::string interface;
 
+  //$ ./fdscan [-r filename] [-i interface] [-t time] [-o time_offset] [-S secs] [-h HNum] [-p PNum] [-V]
   if (argc == 1) {
     usage();
   }
@@ -384,13 +453,17 @@ int main(int argc, char* argv[])
       interface = argv[++i];
     } else if (strcmp(argv[i], "-t") == 0) {
       user_specified_time = 1;
-      runtime = std::stoi(argv[++i]);
+      runtime = std::stol(argv[++i]);
     } else if (strcmp(argv[i], "-o") == 0) {
       time_offset = std::stoi(argv[++i]);
-    } else if (strcmp(argv[i], "-N") == 0) {
-      num = std::stoi(argv[++i]);
     } else if (strcmp(argv[i], "-S") == 0) {
-      timeout_interval = std::stoi(argv[++i]);
+      timeout_interval = std::stol(argv[++i]);
+    } else if (strcmp(argv[i], "-h") == 0) {
+      hostsThreshold = std::stoi(argv[++i]);
+    } else if (strcmp(argv[i], "-p") == 0) {
+      portsThreshold = std::stoi(argv[++i]);
+    } else if (strcmp(argv[i], "-V") == 0) {
+      verbose = true;
     } else {
       usage();
     }
@@ -426,10 +499,33 @@ int main(int argc, char* argv[])
     pcap_close(pcap);
   
   } else if (interface.size()) {
+    pcap_t *pcap = pcap_open_live(interface.c_str(), SNAP_LEN, /*promiscuous mode*/1, 1000, errbuf);
 
+    /* compile the filter expression */
+    if (pcap_compile(pcap, &fp, filter_exp, 0, net) == -1) {
+      fprintf(stderr, "Couldn't parse filter %s: %s\n",
+          filter_exp, pcap_geterr(pcap));
+      exit(EXIT_FAILURE);
+    }
+
+    /* apply the compiled filter */
+    if (pcap_setfilter(pcap, &fp) == -1) {
+      fprintf(stderr, "Couldn't install filter %s: %s\n",
+          filter_exp, pcap_geterr(pcap));
+      exit(EXIT_FAILURE);
+    }
+
+    pcap_loop(pcap, /*all packets*/-1, handlePacket, NULL);
+
+    /* cleanup */
+    pcap_freecode(&fp);
+    pcap_close(pcap);
   }
 
-  cleanupAndPrint();
+  // print the results
+  cleanup();
+  compileScanners();
+  printScanners();
 
   return 0;
 }
