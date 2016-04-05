@@ -72,36 +72,80 @@ void compileScanners()
     for (auto &flow : finishedFlow.second) {
       if (debug)
         flow.print();
-      Scanner scanner(flow.srcAddr, flow.protocol);
-      auto scannerItr = std::find_if(scanners.begin(), scanners.end(), scanner);
+      //Scanner scanner(flow.srcAddr, flow.protocol);
+      Scanner scanner;//(flow.srcAddr, flow.protocol);
+      scanner.ip = flow.srcAddr;
+      scanner.protocol = flow.protocol;
+      auto scannerHash = scanner.hashValue();
+      auto scannerItr = scanners.find(scannerHash);
       if (scannerItr != scanners.end()) {
         // Already tracking this scanner
-        auto &s = *scannerItr;
-        auto hostItr = std::find(s.dstHosts.begin(), s.dstHosts.end(), flow.dstAddr);
-        if (hostItr != s.dstHosts.end()) {
+        auto &s = scannerItr->second;
+        auto hostItr = s.dstHosts.find(flow.dstAddr);
+        if (hostItr == s.dstHosts.end()) {
           // new dest host to add
-          s.dstHosts.push_back(flow.dstAddr);
-        }
-
-        auto portItr = std::find(s.dstPorts.begin(), s.dstPorts.end(), flow.dstPort);
-        if (portItr != s.dstPorts.end()) {
-          // new dest port to add
-          s.dstPorts.push_back(flow.dstPort);
+          s.dstHosts[flow.dstAddr].push_back(flow.dstPort);
+        } else {
+          auto portItr = std::find(hostItr->second.begin(), hostItr->second.end(), flow.dstPort);
+          if (portItr == hostItr->second.end())
+            hostItr->second.push_back(flow.dstPort);
         }
       } else {
         // New scanner - add it to our list of potentials
-        scanner.dstHosts.push_back(flow.dstAddr);
-        scanner.dstPorts.push_back(flow.dstPort);
-        size_t hashValue = scanner.hashValue();
-        finishedFlows[hashValue].push_back(scanner);
+        scanner.dstHosts[flow.dstAddr].push_back(flow.dstPort);
+        scanners[scannerHash] = scanner;
       }
       // TODO maybe do the same for the flow.dstAddr?
     }
   }
 }
+std::string getFormatedPorts(dstPorts_t& ports)
+{
+  // TODO clean up output so that consecutive ports look like 1, 3 -15, 21
+  std::stringstream ss;
+  std::sort(ports.begin(), ports.end());
+  for (auto &port : ports) {
+    ss << port << " ";
+  }
+
+  return ss.str();
+}
+ 
+bool haveScanners()
+{
+  for (auto &scannerItr : scanners) {
+    auto &s = scannerItr.second;
+    auto numHosts = s.dstHosts.size();
+    if (numHosts >= hostsThreshold)
+      return true;
+    for (auto &hostItr : s.dstHosts) {
+      auto numPorts = hostItr.second.size();
+      if (numPorts >= portsThreshold)
+        return true;
+    }
+  }
+
+  return false;
+}
+
+bool isScanner(Scanner &s)
+{
+  if (s.dstHosts.size() >= hostsThreshold)
+    return true;
+  for (auto &hostItr : s.dstHosts) {
+    if (hostItr.second.size() >= portsThreshold)
+      return true;
+  }
+  return false;
+}
 
 void printScanners()
 {
+  if (!haveScanners()) {
+    std::cout << "Hooray! No scanners found." << std::endl;
+    return;
+  }
+
   // will the real scanners please stand up, please stand up
   if (verbose) {
     // print scanner details
@@ -109,35 +153,42 @@ void printScanners()
     << padString("Proto", 6)
     << padString("HostScanned", 16)
     << "PortsScanned" << std::endl;
-    for (auto &s : scanners) {
-      auto numHosts = s.dstHosts.size();
-      auto numPorts = s.dstPorts.size();
-      if (numHosts >= hostsThreshold || numPorts >= portsThreshold) {
-        // we have a scanner!
-        for (auto &host : s.dstHosts) {
-          //std::string portStr = formatPortStr(
-          //std::cout << padString(s.ip, 16)
-          //<< padString(s.protocol, 6)
-          //<< padString(host, 16)
-          //<< std::endl;
-          //<< std::endl;
+
+    for (auto &scannerItr : scanners) {
+      auto &s = scannerItr.second;
+      if (isScanner(s)) {
+        for (auto &hostItr : s.dstHosts) {
+          auto hostName = hostItr.first;
+          std::cout << padString(s.ip, 16)
+          << padString(s.protocol, 6)
+          << padString(hostName, 16)
+          << getFormatedPorts(hostItr.second);
+          std::cout << std::endl;
         }
       }
     }
   }
+  std::cout << std::endl;
 
   // print scanner summary
+  // TODO need to group single scanner IP together, eg. UDP and TCP from same ip should combine for summary
   std::cout << "Summary:" << std::endl;
   std::cout << padString("Scanner", 16) << "#HostsScanned #PortsScanned" << std::endl;
-  for (auto &s : scanners) {
-    auto numHosts = s.dstHosts.size();
-    auto numPorts = s.dstPorts.size();
-    if (numHosts >= hostsThreshold || numPorts >= portsThreshold) {
-      // we have a scanner!
-      std::cout << padString(s.ip, 16) << padString(numHosts, 14) << numPorts << std::endl;
+  for (auto &scannerItr : scanners) {
+    auto &s = scannerItr.second;
+    if (isScanner(s)) {
+      auto numHosts = s.dstHosts.size();
+      auto numPorts = 0;
+      if (numHosts >= hostsThreshold) {
+        for (auto &hostItr : s.dstHosts) {
+          numPorts += hostItr.second.size();
+        }
+      }
+      std::cout << padString(s.ip, 16)
+      << padString(std::to_string(numHosts), 14)
+      << numPorts << std::endl;
     }
   }
-
 }
 
 //
@@ -145,7 +196,7 @@ void printScanners()
 //
 void usage()
 {
-  std::cout << "Usage: ./fsniffer [-r filename] [-i interface] [-t time] [-o time_offset] [-N num] [-S secs]" << std::endl;
+  std::cout << "Usage: ./fdscan [-r filename] [-i interface] [-t time] [-o time_offset] [-S secs] [-h HNum] [-p PNum] [-V]" << std::endl;
   exit(0);
 }
 
@@ -445,9 +496,9 @@ int main(int argc, char* argv[])
     usage();
   }
   for (int i = 1; i < argc; ++i) {
-    if (strcmp(argv[i], "-h") == 0) {
-      usage();
-    } else if (strcmp(argv[i], "-r") == 0) {
+    //if (strcmp(argv[i], "-h") == 0) {
+    //  usage();
+    if (strcmp(argv[i], "-r") == 0) {
       filename = argv[++i];
     } else if (strcmp(argv[i], "-i") == 0) {
       interface = argv[++i];

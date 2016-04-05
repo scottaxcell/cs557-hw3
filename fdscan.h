@@ -177,32 +177,37 @@ public:
 // Horizontal Scan: A horizontal scan is described as scan against a group of IP addresses over a single port. In other words, a scanner may be looking for all active web servers in a subnet, so it scans all IP addresses on port 80.
 // Vertical Scan: A vertical scan is described as a single IP address being scanned for multiple live ports. For example, a scanner may scan all ports on a host looking for active services.
 
+typedef std::vector<int> dstPorts_t;
+typedef std::map<std::string, dstPorts_t> dstHosts_t;
 class Scanner
 {
+public:
   std::string ip;
   std::string protocol;
-  std::vector<std::string> dstHosts;
-  std::vector<int> dstPorts;
+  dstHosts_t dstHosts; //dstHosts[10.0.0.3] = [ 23, 24, 63]
 
-  // TODO rework datastructures, need to track which ports are associated with which hosts
+  Scanner() {}
 
   Scanner(std::string &ip, std::string &protocol)
   : ip(ip), protocol(protocol)
-  {
-  }
+  {}
 
-  size_t hashValue() {
+  Scanner(const Scanner &s)
+  : ip(s.ip), protocol(s.protocol)
+  {}
+
+  size_t hashValue() const {
     std::hash<std::string> hash_fn;
     size_t ipHash = hash_fn(ip);
     size_t protocolHash = hash_fn(protocol);
     return (ipHash + protocolHash);
   }
 
-  bool operator==(const Scanner& s) {
+  bool operator==(const Scanner& s) const {
     return hashValue() == s.hashValue();
   }
 
-  bool operator()(const Scanner& s) {
+  bool operator()(const Scanner& s) const {
     return hashValue() == s.hashValue();
   }
 
