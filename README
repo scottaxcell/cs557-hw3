@@ -1,7 +1,7 @@
 ===============
 Program: fdscan 
 ===============
-* TBD
+* This program detects scanner IPs. It is able to discover horizontal and vertical scanners.
 
 
 ======
@@ -13,9 +13,21 @@ $ ./fdscan [-r filename] [-i interface] [-t time] [-o time_offset] [-S secs] [-h
 ==================
 Website resources:
 ==================
-TBD
+Algorithm for grouping consecutive integers in a vector
+http://stackoverflow.com/questions/13628124/seperate-range-of-numbers-if-in-sequence-by-hyphen-and-if-break-in-sequence-occu
+Networking examples I used in homework 2.
+http://nsmwiki.org/Argus
+http://www.nthelp.com/icmp.html
+http://linux.die.net/man/3/timersub
+http://www.tcpdump.org/pcap.html
+https://wiki.wireshark.org/SampleCaptures
 
 ======
 Notes:
 ======
-TBD
+* I built this fdscan program on top of the fsniffer I built in homework 2.
+
+* Everything appears to be working correctly. I tested the scanner detection on a number
+of nmap capture files I found on the wireshark wiki. See the link in the website resources above.
+
+* I was successfull at building and running on the Ubuntu1404-64-STDNDN image in DETER.

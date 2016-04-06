@@ -18,9 +18,9 @@ static int user_specified_time = 0; // did the use specify a runtime
 
 static std::map<size_t, Scanner> scanners;
 static bool verbose = false;
-static int hostsThreshold = 30;
-static int portsThreshold = 30;
-static bool debug = true;
+static int hostsThreshold = 64;
+static int portsThreshold = 64;
+static bool debug = false;
 
 //
 // Format string for a nice output
@@ -32,24 +32,6 @@ std::string padString(std::string input, int size)
     str += " ";
   }
   return str;
-}
-
-//
-// Print output header
-//
-void printHeader()
-{
-  std::cout << padString("StartTime", 16)
-  << padString("Proto", 6)
-  << padString("SrcAddr", 16)
-  << padString("Sport", 6)
-  << padString("Dir", 4)
-  << padString("DstAddr", 16)
-  << padString("Dport", 6)
-  << padString("TotPkts", 10)
-  << padString("TotBytes", 10)
-  << padString("State", 10)
-  << "Dur\n";
 }
 
 //
@@ -105,9 +87,24 @@ std::string getFormatedPorts(dstPorts_t& ports)
   // TODO clean up output so that consecutive ports look like 1, 3 -15, 21
   std::stringstream ss;
   std::sort(ports.begin(), ports.end());
-  for (auto &port : ports) {
-    ss << port << " ";
+  int start, end;
+  end = start = ports[0];
+  for (int i = 1; i < ports.size(); i++) {
+    if (ports[i] == (ports[i-1] + 1))
+      end = ports[i];
+    else {
+      if (start == end)
+        ss << start << ",";
+      else
+        ss << start << "-" << end << ",";
+      start = end = ports[i];
+    }
   }
+
+  if (start == end)
+    ss << start;
+  else
+    ss << start << "-" << end;
 
   return ss.str();
 }
@@ -456,7 +453,6 @@ void handlePacket(u_char *useless, const struct pcap_pkthdr *pkthdr, const u_cha
     //
     if (flow.protocol == "ICMP") {
       icmp = (struct icmp*)(packet + SIZE_ETHERNET + size_ip);
-      //flow.state = std::to_string(icmp->icmp_type);
       std::stringstream ss;
       ss << (int)icmp->icmp_type;
       flow.state = ss.str();
