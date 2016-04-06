@@ -3,6 +3,7 @@
 #include <map>
 #include <algorithm>
 #include <sstream>
+#include <set>
 #include "fdscan.h"
 
 static std::map<size_t, std::vector<Flow>> finishedFlows;
@@ -170,24 +171,28 @@ void printScanners()
   }
   std::cout << std::endl;
 
-  // print scanner summary
-  // TODO need to group single scanner IP together, eg. UDP and TCP from same ip should combine for summary
-  std::cout << "Summary:" << std::endl;
-  std::cout << padString("Scanner", 16) << "#HostsScanned #PortsScanned" << std::endl;
+  std::map<std::string, std::pair<std::set<std::string>, int>> summaryScanners;
   for (auto &scannerItr : scanners) {
     auto &s = scannerItr.second;
     if (isScanner(s)) {
-      auto numHosts = s.dstHosts.size();
-      auto numPorts = 0;
-      if (numHosts >= hostsThreshold) {
-        for (auto &hostItr : s.dstHosts) {
-          numPorts += hostItr.second.size();
-        }
+      if (summaryScanners.find(s.ip) == summaryScanners.end()) {
+        // start counting hosts and ports for this scanner ip
+        summaryScanners[s.ip] = std::make_pair(std::set<std::string>(), 0);
       }
-      std::cout << padString(s.ip, 16)
-      << padString(std::to_string(numHosts), 14)
-      << numPorts << std::endl;
+      for (auto &hostItr : s.dstHosts) {
+        summaryScanners[s.ip].first.insert(hostItr.first);
+        summaryScanners[s.ip].second += hostItr.second.size();
+      }
     }
+  }
+  
+  // print scanner summary
+  std::cout << "Summary:" << std::endl;
+  std::cout << padString("Scanner", 16) << "#HostsScanned #PortsScanned" << std::endl;
+  for (auto &scannerItr : summaryScanners) {
+    std::cout << padString(scannerItr.first, 16)
+    << padString(std::to_string(scannerItr.second.first.size()), 14)
+    << scannerItr.second.second << std::endl;
   }
 }
 
