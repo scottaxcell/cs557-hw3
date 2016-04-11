@@ -20,7 +20,11 @@ static std::map<size_t, Scanner> scanners;
 static bool verbose = false;
 static int hostsThreshold = 64;
 static int portsThreshold = 64;
+<<<<<<< Updated upstream
 static bool debug = false;
+=======
+static bool debug = true;
+>>>>>>> Stashed changes
 
 //
 // Format string for a nice output
